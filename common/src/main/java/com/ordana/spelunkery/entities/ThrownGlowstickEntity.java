@@ -26,8 +26,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.HashMap;
+import java.util.function.Supplier;
 
 public class ThrownGlowstickEntity extends ImprovedProjectileEntity {
     private static final EntityDataAccessor<Integer> DATA_GLOWSTICK_COLOR;
@@ -48,6 +50,29 @@ public class ThrownGlowstickEntity extends ImprovedProjectileEntity {
     protected void defineSynchedData() {
         super.defineSynchedData();
         this.entityData.define(DATA_GLOWSTICK_COLOR, DyeColor.RED.getId());
+    }
+
+    @Override
+    public void tick() {
+        // A carrier moving fast (e.g. a flying player) can leave this entity with a non-finite
+        // position/velocity for a tick; letting that reach the collision code throws every tick,
+        // which anti-crash mods like Neruina catch and report as a broken/lagging entity.
+        if (!isFinite(this.position()) || !isFinite(this.getDeltaMovement())) {
+            this.discard();
+            return;
+        }
+        super.tick();
+    }
+
+    private static boolean isFinite(Vec3 vec) {
+        return Double.isFinite(vec.x) && Double.isFinite(vec.y) && Double.isFinite(vec.z);
+    }
+
+    @Override
+    protected ColliderType getColliderType() {
+        // RAY is the same collision vanilla throwables use; it skips the AABB path's per-tick
+        // block-set enumeration, which is what breaks down under the movement spikes above.
+        return ColliderType.RAY;
     }
 
     public void addAdditionalSaveData(CompoundTag compound) {
@@ -91,7 +116,17 @@ public class ThrownGlowstickEntity extends ImprovedProjectileEntity {
     }
 
     public static Block getGlowstickBlock(DyeColor color) {
-        return DYE_COLOR_TO_BLOCK.getOrDefault(color, ModBlocks.GLOWSTICK.get());
+        Block cached = DYE_COLOR_TO_BLOCK.get(color);
+        if (cached != null) return cached;
+
+        // Not cached yet: either this class loaded before Moonlight's queued Fabric block
+        // registration ran (so eagerly resolving at class-init would have baked in a null forever),
+        // or a compat addon (e.g. Dye The World) hasn't populated its own color here yet.
+        // Resolve fresh and cache it now that we know registration has actually happened.
+        Supplier<Block> supplier = VANILLA_COLOR_BLOCKS.getOrDefault(color, ModBlocks.GLOWSTICK);
+        Block block = supplier.get();
+        if (block != null) DYE_COLOR_TO_BLOCK.put(color, block);
+        return block != null ? block : ModBlocks.GLOWSTICK.get();
     }
 
     protected void onHit(HitResult result) {
@@ -123,25 +158,29 @@ public class ThrownGlowstickEntity extends ImprovedProjectileEntity {
         DATA_GLOWSTICK_COLOR = SynchedEntityData.defineId(ThrownGlowstickEntity.class, EntityDataSerializers.INT);
     }
 
+    // Kept as DyeColor -> Block (not Supplier<Block>) since compat addons (e.g. Dye The World's
+    // DyedSpelunkery) write their own registered blocks directly into this public map.
     public static final HashMap<DyeColor, Block> DYE_COLOR_TO_BLOCK = new HashMap<>();
 
+    private static final HashMap<DyeColor, Supplier<Block>> VANILLA_COLOR_BLOCKS = new HashMap<>();
+
     static {
-        DYE_COLOR_TO_BLOCK.put(null, ModBlocks.GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.RED, ModBlocks.RED_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.ORANGE, ModBlocks.ORANGE_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.YELLOW, ModBlocks.YELLOW_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.LIME, ModBlocks.LIME_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.GREEN, ModBlocks.GREEN_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.CYAN, ModBlocks.CYAN_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.LIGHT_BLUE, ModBlocks.LIGHT_BLUE_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.BLUE, ModBlocks.BLUE_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.PURPLE, ModBlocks.PURPLE_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.MAGENTA, ModBlocks.MAGENTA_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.PINK, ModBlocks.PINK_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.BROWN, ModBlocks.BROWN_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.BLACK, ModBlocks.BLACK_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.WHITE, ModBlocks.WHITE_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.GRAY, ModBlocks.GRAY_GLOWSTICK.get());
-        DYE_COLOR_TO_BLOCK.put(DyeColor.LIGHT_GRAY, ModBlocks.LIGHT_GRAY_GLOWSTICK.get());
+        VANILLA_COLOR_BLOCKS.put(null, ModBlocks.GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.RED, ModBlocks.RED_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.ORANGE, ModBlocks.ORANGE_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.YELLOW, ModBlocks.YELLOW_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.LIME, ModBlocks.LIME_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.GREEN, ModBlocks.GREEN_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.CYAN, ModBlocks.CYAN_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.LIGHT_BLUE, ModBlocks.LIGHT_BLUE_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.BLUE, ModBlocks.BLUE_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.PURPLE, ModBlocks.PURPLE_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.MAGENTA, ModBlocks.MAGENTA_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.PINK, ModBlocks.PINK_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.BROWN, ModBlocks.BROWN_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.BLACK, ModBlocks.BLACK_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.WHITE, ModBlocks.WHITE_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.GRAY, ModBlocks.GRAY_GLOWSTICK);
+        VANILLA_COLOR_BLOCKS.put(DyeColor.LIGHT_GRAY, ModBlocks.LIGHT_GRAY_GLOWSTICK);
     }
 }
